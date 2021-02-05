@@ -3,7 +3,7 @@ from tensorflow.keras.layers import Dense, Flatten, Conv2D, AveragePooling2D, Dr
 from tensorflow.keras.models import Sequential
 from tensorflow.keras import datasets
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.callbacks import TensorBoard
+from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
 import matplotlib.pyplot as plt
 import datetime
 import numpy as np
@@ -13,13 +13,13 @@ from tensorflow_privacy.privacy.dp_query import gaussian_query
 from absl import logging
 import collections
 import logging
-from scipy import stats
 import seaborn as sns
 sns.set()
 
 BATCH_SIZE = 128
 EPOCHS = 25
 LOGDIR = "./logs/"
+MODEL_DIR = "./model/"
 
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 if len(physical_devices) > 0:
@@ -179,26 +179,26 @@ class LeNet(Sequential):
         if dropout:
             self.add(Dropout(0.05))
         if dataset_name == "MNIST":
-            self.add(Conv1D(6, kernel_size=5, activation='relu', input_shape=input_shape))
+            self.add(Conv1D(6, kernel_size=5, activation='tanh', input_shape=input_shape))
             self.add(AveragePooling1D())
         elif dataset_name == "CIFAR-10":
-            self.add(Conv2D(6, kernel_size=(5, 5), activation='relu', input_shape=input_shape))
+            self.add(Conv2D(6, kernel_size=(5, 5), activation='tanh'))
             self.add(AveragePooling2D())
         if dropout:
             self.add(Dropout(0.05))
         if dataset_name == "MNIST":
-            self.add(Conv1D(16, kernel_size=5, activation='relu', input_shape=input_shape))
+            self.add(Conv1D(16, kernel_size=5, activation='tanh', input_shape=input_shape))
             self.add(AveragePooling1D())
         elif dataset_name == "CIFAR-10":
-            self.add(Conv2D(16, kernel_size=(5, 5), activation='relu'))
+            self.add(Conv2D(16, kernel_size=(5, 5), activation='tanh'))
             self.add(AveragePooling2D())
         self.add(Flatten())
         if dropout:
             self.add(Dropout(0.05))
-        self.add(Dense(120, activation='relu'))
+        self.add(Dense(120, activation='tanh'))
         if dropout:
             self.add(Dropout(0.05))
-        self.add(Dense(84, activation='relu'))
+        self.add(Dense(84, activation='tanh'))
         if dropout:
             self.add(Dropout(0.05))
         self.add(Dense(num_classes, activation='softmax'))
@@ -218,7 +218,6 @@ class LeNet(Sequential):
                 learning_rate=lr)
         else:
             opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0)
-
 
         self.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
 
@@ -257,11 +256,13 @@ if __name__ == "__main__":
     for name, model in modeldict.items():
         TBLOGDIR = LOGDIR + "CIFAR-10_" + name
         tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
+        earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001)
         model.fit(train_data, train_labels,
                   epochs=EPOCHS,
                   validation_data=(test_data, test_labels),
                   batch_size=BATCH_SIZE,
-                  callbacks=[tensorboard_callback])
+                  callbacks=[tensorboard_callback, earlystopping])
+        model.save(MODEL_DIR + "CIFAR-10_" + name)
 
     # Instantiate models for MNIST
     print("Instantiating models for MNIST...")
@@ -296,8 +297,10 @@ if __name__ == "__main__":
     for name, model in modeldict.items():
         TBLOGDIR = LOGDIR + "MNIST_" + name
         tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
+        earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001)
         model.fit(train_data, train_labels,
                   epochs=EPOCHS,
                   validation_data=(test_data, test_labels),
                   batch_size=BATCH_SIZE,
-                  callbacks=[tensorboard_callback])
+                  callbacks=[tensorboard_callback, earlystopping])
+        model.save(MODEL_DIR + "MNIST_" + name)
