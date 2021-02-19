@@ -1,6 +1,9 @@
+import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, AveragePooling2D, Dropout, Conv1D, AveragePooling1D
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Model
 from tensorflow.keras import datasets
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
@@ -14,6 +17,7 @@ from absl import logging
 import collections
 import logging
 import seaborn as sns
+
 sns.set()
 
 BATCH_SIZE = 128
@@ -164,71 +168,76 @@ def make_gaussian_optimizer_class(cls):
     return DPGaussianOptimizerClass
 
 
-class LeNet(Sequential):
-    def __init__(self, dataset_name, dropout=False, dp=False, lr=0.01):
-        super().__init__()
-        if dataset_name == "MNIST":
-            input_shape = (28, 28)
-            num_classes = 10
-        elif dataset_name == "CIFAR-10":
-            input_shape = (32, 32, 3)
-            num_classes = 10
-        else:
-            print("Only MNIST and CIFAR-10 are acceptable datasets at this time.")
-            exit(1)
-        if dropout:
-            self.add(Dropout(0.05))
-        if dataset_name == "MNIST":
-            self.add(Conv1D(6, kernel_size=5, activation='tanh', input_shape=input_shape))
-            self.add(AveragePooling1D())
-        elif dataset_name == "CIFAR-10":
-            self.add(Conv2D(6, kernel_size=(5, 5), activation='tanh'))
-            self.add(AveragePooling2D())
-        if dropout:
-            self.add(Dropout(0.05))
-        if dataset_name == "MNIST":
-            self.add(Conv1D(16, kernel_size=5, activation='tanh', input_shape=input_shape))
-            self.add(AveragePooling1D())
-        elif dataset_name == "CIFAR-10":
-            self.add(Conv2D(16, kernel_size=(5, 5), activation='tanh'))
-            self.add(AveragePooling2D())
-        self.add(Flatten())
-        if dropout:
-            self.add(Dropout(0.05))
-        self.add(Dense(120, activation='tanh'))
-        if dropout:
-            self.add(Dropout(0.05))
-        self.add(Dense(84, activation='tanh'))
-        if dropout:
-            self.add(Dropout(0.05))
-        self.add(Dense(num_classes, activation='softmax'))
+def create_model(dataset_name, dropout=False, dropout_rate=0.1):
+    if dataset_name == "MNIST":
+        input_shape = (28, 28)
+        num_classes = 10
+    elif dataset_name == "CIFAR-10":
+        input_shape = (32, 32, 3)
+        num_classes = 10
+    else:
+        print("Only MNIST and CIFAR-10 are acceptable datasets at this time.")
+        exit(1)
 
-        if dp is True:
-            l2_norm_clip = 1.5
-            noise_multiplier = 1.3
-            num_microbatches = BATCH_SIZE
+    inputs = tf.keras.Input(shape=input_shape)
+    if dataset_name == "MNIST":
+        x = Conv1D(6, kernel_size=5, activation='tanh')(inputs)
+        x = AveragePooling1D()(x)
+    elif dataset_name == "CIFAR-10":
+        x = Conv2D(6, kernel_size=(5, 5), activation='tanh')(inputs)
+        x = AveragePooling2D()(x)
+    if dropout:
+        x = Dropout(dropout_rate)(x)
+    if dataset_name == "MNIST":
+        x = Conv1D(16, kernel_size=5, activation='tanh')(x)
+        x = AveragePooling1D()(x)
+    elif dataset_name == "CIFAR-10":
+        x = Conv2D(16, kernel_size=(5, 5), activation='tanh')(x)
+        x = AveragePooling2D()(x)
+    x = Flatten()(x)
+    if dropout:
+        x = Dropout(dropout_rate)(x)
+    x = Dense(120, activation='tanh')(x)
+    if dropout:
+        x = Dropout(0.05)(x)
+    x = Dense(84, activation='tanh')(x)
+    if dropout:
+        x = Dropout(0.05)(x)
+    out = Dense(num_classes, activation='softmax')(x)
 
-            GradientDescentOptimizer = tf.compat.v1.train.GradientDescentOptimizer
-            DPGradientDescentGaussianOptimizer_NEW = make_gaussian_optimizer_class(GradientDescentOptimizer)
+    model = Model(inputs=inputs, outputs=out)
+    print(model.summary())
 
-            opt = DPGradientDescentGaussianOptimizer_NEW(
-                l2_norm_clip=l2_norm_clip,
-                noise_multiplier=noise_multiplier,
-                num_microbatches=num_microbatches,
-                learning_rate=lr)
-        else:
-            opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0)
-
-        self.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    return model
 
 
 if __name__ == "__main__":
+    lr = 0.01
+    l2_norm_clip = 1.5
+    noise_multiplier = 1.3
+    num_microbatches = BATCH_SIZE
+
+    GradientDescentOptimizer = tf.compat.v1.train.GradientDescentOptimizer
+    DPGradientDescentGaussianOptimizer_NEW = make_gaussian_optimizer_class(GradientDescentOptimizer)
+
+    dp_opt = DPGradientDescentGaussianOptimizer_NEW(
+        l2_norm_clip=l2_norm_clip,
+        noise_multiplier=noise_multiplier,
+        num_microbatches=num_microbatches,
+        learning_rate=lr)
+    opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0)
+
     # Instantiate models for CIFAR-10
     print("Instantiating models for CIFAR-10...")
-    CIFAR_vanilla = LeNet("CIFAR-10")
-    dp_CIFAR = LeNet("CIFAR-10", dp=True)
-    dropout_CIFAR = LeNet("CIFAR-10", dropout=True)
-    dp_dropout_CIFAR = LeNet("CIFAR-10", dropout=True, dp=True)
+    CIFAR_vanilla = create_model("CIFAR-10")
+    dp_CIFAR = create_model("CIFAR-10")
+    dropout_CIFAR = create_model("CIFAR-10", dropout=True)
+    dp_dropout_CIFAR = create_model("CIFAR-10", dropout=True)
+
+    CIFAR_vanilla.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    dp_CIFAR.compile(optimizer=dp_opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    dropout_CIFAR.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    dp_dropout_CIFAR.compile(optimizer=dp_opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
 
     modeldict = {"LeNet5": CIFAR_vanilla,
                  "DP_LeNet": dp_CIFAR,
@@ -266,10 +275,15 @@ if __name__ == "__main__":
 
     # Instantiate models for MNIST
     print("Instantiating models for MNIST...")
-    MNIST_vanilla = LeNet("MNIST")
-    dp_MNIST = LeNet("MNIST", dp=True)
-    dropout_MNIST = LeNet("MNIST", dropout=True)
-    dp_dropout_MNIST = LeNet("MNIST", dropout=True, dp=True)
+    MNIST_vanilla = create_model("MNIST")
+    dp_MNIST = create_model("MNIST")
+    dropout_MNIST = create_model("MNIST", dropout=True)
+    dp_dropout_MNIST = create_model("MNIST", dropout=True)
+
+    MNIST_vanilla.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    dp_MNIST.compile(optimizer=dp_opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    dropout_MNIST.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+    dp_dropout_MNIST.compile(optimizer=dp_opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
 
     modeldict = {"LeNet5": MNIST_vanilla,
                  "DP_LeNet": dp_MNIST,

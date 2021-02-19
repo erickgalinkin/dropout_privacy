@@ -1,3 +1,5 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 import numpy as np
@@ -5,7 +7,6 @@ import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, Dropout, Conv1D, MaxPooling1D
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
-import os
 import logging
 
 EPOCHS = 25
@@ -62,11 +63,11 @@ class AttackNet(Sequential):
         self.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
 
 
-def train_shadow_model(train, test, shape, name):
-    perm_train = random_sample(train)
-    perm_test = random_sample(test)
-    train_data, train_labels = perm_train
-    test_data, test_labels = perm_test
+def train_shadow_model(train, test, shape):
+    # perm_train = random_sample(train)
+    # perm_test = random_sample(test)
+    train_data, train_labels = train
+    test_data, test_labels = test
 
     train_data = np.array(train_data, dtype=np.float32) / 255
     test_data = np.array(test_data, dtype=np.float32) / 255
@@ -79,18 +80,23 @@ def train_shadow_model(train, test, shape, name):
     test_labels = tf.keras.utils.to_categorical(test_labels, num_classes=10)
 
     shadow_model = VGGNet(shape)
-    earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=2)
-    TBLOGDIR = LOGDIR + "Shadow_" + name
+    earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=3)
+    TBLOGDIR = LOGDIR + "Shadow"
     tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
-    shadow_model.fit(train_data, train_labels,
-                     epochs=EPOCHS,
-                     validation_data=(test_data, test_labels),
-                     callbacks=[earlystopping, tensorboard_callback])
+    history = shadow_model.fit(train_data, train_labels,
+                               batch_size=100,
+                               epochs=EPOCHS,
+                               validation_data=(test_data, test_labels),
+                               verbose=1,
+                               callbacks=[earlystopping, tensorboard_callback])
+
+    print(f"Shadow model training accuracy: {history.history['accuracy']}\n "
+          f"Shadow model validation accuracy:{history.history['val_accuracy']}\n")
 
     return train_data, test_data, shadow_model
 
 
-def train_attack_model(train_x, test_x, shadow, name):
+def train_attack_model(train_x, test_x, shadow):
     attack_model = AttackNet()
     in_label = np.ones(len(train_x))
     out_label = np.zeros(len(test_x))
@@ -98,32 +104,35 @@ def train_attack_model(train_x, test_x, shadow, name):
     out_preds = shadow.predict(test_x)
 
     earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=2)
-    TBLOGDIR = LOGDIR + "Attack_" + name
+    TBLOGDIR = LOGDIR + "Attack"
     tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
     attack_model.fit(in_preds, in_label,
                      epochs=EPOCHS,
                      validation_data=(out_preds, out_label),
+                     verbose=0,
                      callbacks=[earlystopping, tensorboard_callback])
     return attack_model
 
 
-def attack_target(attack_model, shadow_model, target_model, train, test):
+def attack_target(attack_model, target, train, test):
     train_data, train_labels = train
     test_data, test_labels = test
 
-    preds = shadow_model.predict(train_data)
+    target_model = tf.keras.models.load_model(MODEL_PATH + target)
+
+    preds = target_model.predict(train_data)
     in_preds = attack_model.predict(preds)
     in_preds = [1 if p >= 0.5 else 0 for p in in_preds]
     in_acc = np.average(in_preds)
 
-    preds = shadow_model.predict(test_data)
+    preds = target_model.predict(test_data)
     out_preds = attack_model.predict(preds)
     out_preds = [1 if p >= 0.5 else 0 for p in out_preds]
     out_acc = np.average(out_preds)
     overall = 0.5 * (in_acc + out_acc)
-    print("Training set attack accuracy for {}: {}".format(target_model, in_acc))
-    print("Test set attack accuracy for {}: {}".format(target_model, out_acc))
-    print("Overall attack accuracy for {}: {}".format(target_model, overall))
+    print("Training set attack accuracy for {}: {}".format(target, in_acc))
+    print("Test set attack accuracy for {}: {}".format(target, out_acc))
+    print("Overall attack accuracy for {}: {}".format(target, overall))
 
 
 if __name__ == "__main__":
@@ -132,7 +141,7 @@ if __name__ == "__main__":
     mnist_models = ["MNIST_" + name for name in models]
 
     cifar_train, cifar_test = tf.keras.datasets.cifar10.load_data()
+    train_x, test_x, shadow = train_shadow_model(cifar_train, cifar_test, (32, 32, 3))
+    attack = train_attack_model(train_x, test_x, shadow)
     for model in cifar_models:
-        train_x, test_x, shadow = train_shadow_model(cifar_train, cifar_test, (32, 32, 3), model)
-        attack = train_attack_model(train_x, test_x, shadow, model)
-        attack_target(attack, shadow, model, cifar_train, cifar_test)
+        attack_target(attack, model, cifar_train, cifar_test)
