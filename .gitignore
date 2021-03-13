@@ -129,4 +129,6 @@ dmypy.json
 .pyre/
 
 #No logs
-/logs
+logs/
+src/logs/
+src/model/
