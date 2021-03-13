@@ -206,13 +206,12 @@ def create_model(dataset_name, dropout=False, dropout_rate=0.1):
     out = Dense(num_classes, activation='softmax')(x)
 
     model = Model(inputs=inputs, outputs=out)
-    print(model.summary())
 
     return model
 
 
 if __name__ == "__main__":
-    lr = 0.01
+    lr = 0.05
     l2_norm_clip = 1.5
     noise_multiplier = 1.3
     num_microbatches = BATCH_SIZE
@@ -265,7 +264,8 @@ if __name__ == "__main__":
     for name, model in modeldict.items():
         TBLOGDIR = LOGDIR + "CIFAR-10_" + name
         tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
-        earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001)
+        earlystopping = EarlyStopping(monitor='val_accuracy', min_delta=0.001, patience=3)
+        print(f'\n reults for {name}')
         model.fit(train_data, train_labels,
                   epochs=EPOCHS,
                   validation_data=(test_data, test_labels),
@@ -311,7 +311,8 @@ if __name__ == "__main__":
     for name, model in modeldict.items():
         TBLOGDIR = LOGDIR + "MNIST_" + name
         tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
-        earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001)
+        earlystopping = EarlyStopping(monitor='val_accuracy', min_delta=0.001, patience=3)
+        print(f'\n reults for {name}')
         model.fit(train_data, train_labels,
                   epochs=EPOCHS,
                   validation_data=(test_data, test_labels),

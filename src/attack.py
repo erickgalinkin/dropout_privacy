@@ -9,7 +9,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
 import logging
 
-EPOCHS = 25
+EPOCHS = 15
 LOGDIR = "./logs/"
 MODEL_PATH = "./model/"
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -20,22 +20,16 @@ logger = tf.get_logger()
 logger.setLevel(logging.ERROR)
 
 
-def random_sample(data):
-    idx = [np.random.randint(len(data)) for _ in data[1]]
-    x = data[0][idx]
-    y = data[1][idx]
-    return (x, y)
-
-
 class VGGNet(Sequential):
     def __init__(self, input_shape):
         super().__init__()
         num_classes = 10
+        self.add(self.preprocessing())
         if len(input_shape) == 2:
             self.add(Conv1D(32, kernel_size=3, activation='relu', input_shape=input_shape))
-            self.add(MaxPooling1D())
+            self.add(MaxPooling2D())
             self.add(Conv1D(64, kernel_size=3, activation='relu'))
-            self.add(MaxPooling1D())
+            self.add(MaxPooling2D())
         elif len(input_shape) == 3:
             self.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=input_shape))
             self.add(MaxPooling2D())
@@ -46,9 +40,19 @@ class VGGNet(Sequential):
         self.add(Dense(84, activation='relu'))
         self.add(Dense(num_classes, activation='softmax'))
 
-        opt = tf.keras.optimizers.Adam()
+        opt = tf.keras.optimizers.SGD()
 
         self.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+
+    @staticmethod
+    def preprocessing():
+        data_augmentation = tf.keras.Sequential([
+            tf.keras.layers.experimental.preprocessing.RandomFlip("horizontal_and_vertical"),
+            tf.keras.layers.experimental.preprocessing.RandomRotation(0.25),
+            tf.keras.layers.experimental.preprocessing.Rescaling(1. / 255)
+        ])
+
+        return data_augmentation
 
 
 class AttackNet(Sequential):
@@ -58,24 +62,25 @@ class AttackNet(Sequential):
         self.add(Dense(64, activation='relu'))
         self.add(Dense(1, activation='sigmoid'))
 
-        opt = tf.keras.optimizers.Adam()
+        opt = tf.keras.optimizers.SGD()
 
-        self.compile(optimizer=opt, loss=tf.keras.losses.categorical_crossentropy, metrics=['accuracy'])
+        self.compile(optimizer=opt, loss=tf.keras.losses.sparse_categorical_crossentropy, metrics=['accuracy'])
 
 
 def train_shadow_model(train, test, shape):
-    # perm_train = random_sample(train)
-    # perm_test = random_sample(test)
     train_data, train_labels = train
     test_data, test_labels = test
 
-    train_data = np.array(train_data, dtype=np.float32) / 255
-    test_data = np.array(test_data, dtype=np.float32) / 255
     train_labels = np.array(train_labels, dtype=np.int32)
     test_labels = np.array(test_labels, dtype=np.int32)
 
-    train_data = train_data.reshape(train_data.shape[0], shape[0], shape[1], shape[2])
-    test_data = test_data.reshape(test_data.shape[0], shape[0], shape[1], shape[2])
+    if len(shape) == 3:
+        train_data = train_data.reshape(train_data.shape[0], shape[0], shape[1], shape[2])
+        test_data = test_data.reshape(test_data.shape[0], shape[0], shape[1], shape[2])
+    else:
+        train_data = train_data.reshape(train_data.shape[0], shape[0], shape[1], 1)
+        test_data = test_data.reshape(test_data.shape[0], shape[0], shape[1], 1)
+
     train_labels = tf.keras.utils.to_categorical(train_labels, num_classes=10)
     test_labels = tf.keras.utils.to_categorical(test_labels, num_classes=10)
 
@@ -84,32 +89,35 @@ def train_shadow_model(train, test, shape):
     TBLOGDIR = LOGDIR + "Shadow"
     tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
     history = shadow_model.fit(train_data, train_labels,
-                               batch_size=100,
                                epochs=EPOCHS,
                                validation_data=(test_data, test_labels),
                                verbose=1,
                                callbacks=[earlystopping, tensorboard_callback])
 
-    print(f"Shadow model training accuracy: {history.history['accuracy']}\n "
-          f"Shadow model validation accuracy:{history.history['val_accuracy']}\n")
-
     return train_data, test_data, shadow_model
 
 
 def train_attack_model(train_x, test_x, shadow):
+    print("Training attack model...")
     attack_model = AttackNet()
+    in_size = len(train_x)
     in_label = np.ones(len(train_x))
     out_label = np.zeros(len(test_x))
     in_preds = shadow.predict(train_x)
     out_preds = shadow.predict(test_x)
 
-    earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=2)
+    preds = np.concatenate((in_preds, out_preds))
+    labels = np.concatenate((in_label, out_label))
+
+    train_data, test_data, train_label, test_label = train_test_split(preds, labels, train_size=in_size)
+
+    earlystopping = EarlyStopping(monitor='val_loss', min_delta=0.0001, patience=6)
     TBLOGDIR = LOGDIR + "Attack"
     tensorboard_callback = TensorBoard(log_dir=TBLOGDIR, histogram_freq=1)
-    attack_model.fit(in_preds, in_label,
+    attack_model.fit(train_data, train_label,
                      epochs=EPOCHS,
-                     validation_data=(out_preds, out_label),
-                     verbose=0,
+                     validation_data=(test_data, test_label),
+                     verbose=1,
                      callbacks=[earlystopping, tensorboard_callback])
     return attack_model
 
@@ -127,11 +135,10 @@ def attack_target(attack_model, target, train, test):
 
     preds = target_model.predict(test_data)
     out_preds = attack_model.predict(preds)
-    out_preds = [1 if p >= 0.5 else 0 for p in out_preds]
+    # We mark it correct if it predicts the 0 class for the test set data
+    out_preds = [1 if p < 0.5 else 0 for p in out_preds]
     out_acc = np.average(out_preds)
     overall = 0.5 * (in_acc + out_acc)
-    print("Training set attack accuracy for {}: {}".format(target, in_acc))
-    print("Test set attack accuracy for {}: {}".format(target, out_acc))
     print("Overall attack accuracy for {}: {}".format(target, overall))
 
 
@@ -145,3 +152,9 @@ if __name__ == "__main__":
     attack = train_attack_model(train_x, test_x, shadow)
     for model in cifar_models:
         attack_target(attack, model, cifar_train, cifar_test)
+
+    mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
+    train_x, test_x, shadow = train_shadow_model(mnist_train, mnist_test, (28, 28))
+    attack = train_attack_model(train_x, test_x, shadow)
+    for model in mnist_models:
+        attack_target(attack, model, mnist_train, mnist_test)
