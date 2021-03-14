@@ -4,13 +4,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, AveragePooling2D, Dropout, Conv1D, AveragePooling1D
 from tensorflow.keras.models import Model
-from tensorflow.keras import datasets
-from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
-import matplotlib.pyplot as plt
-import datetime
 import numpy as np
-from tensorflow_privacy.privacy.optimizers import dp_optimizer
 from tensorflow_privacy.privacy.analysis import privacy_ledger
 from tensorflow_privacy.privacy.dp_query import gaussian_query
 from absl import logging
@@ -168,7 +163,7 @@ def make_gaussian_optimizer_class(cls):
     return DPGaussianOptimizerClass
 
 
-def create_model(dataset_name, dropout=False, dropout_rate=0.1):
+def create_model(dataset_name, dropout=False, dropout_rate=0.5):
     if dataset_name == "MNIST":
         input_shape = (28, 28)
         num_classes = 10
@@ -211,7 +206,7 @@ def create_model(dataset_name, dropout=False, dropout_rate=0.1):
 
 
 if __name__ == "__main__":
-    lr = 0.05
+    lr = 0.1
     l2_norm_clip = 1.5
     noise_multiplier = 1.3
     num_microbatches = BATCH_SIZE
@@ -224,7 +219,7 @@ if __name__ == "__main__":
         noise_multiplier=noise_multiplier,
         num_microbatches=num_microbatches,
         learning_rate=lr)
-    opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0)
+    opt = tf.keras.optimizers.SGD(learning_rate=lr)
 
     # Instantiate models for CIFAR-10
     print("Instantiating models for CIFAR-10...")
